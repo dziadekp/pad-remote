@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>Pad Remote</title>
+<style>
+  :root {
+    --bg: #111418; --card: #1b2027; --text: #f2f4f7; --muted: #8b95a3;
+    --go: #1f9d55; --stop: #d93636; --btn: #2a313b; --accent: #4da3ff;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; padding: 16px; gap: 14px;
+    max-width: 520px; margin: 0 auto; user-select: none; }
+  header { display: flex; justify-content: space-between; align-items: center; }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  #status { font-size: 14px; color: var(--muted); }
+  #status.on { color: var(--go); }
+  #status.warn { color: var(--stop); font-weight: 600; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: var(--card); border-radius: 14px; padding: 12px 14px; }
+  .stat.big { grid-column: span 2; text-align: center; }
+  .label { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .value { font-size: 34px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .stat.big .value { font-size: 64px; line-height: 1.1; }
+  .unit { font-size: 16px; color: var(--muted); font-weight: 500; margin-left: 4px; }
+  #target { font-size: 15px; color: var(--muted); }
+  button { border: 0; border-radius: 16px; color: var(--text); font: inherit; font-weight: 700;
+    cursor: pointer; touch-action: manipulation; }
+  button:disabled { opacity: .35; }
+  .speed { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .speed button { background: var(--btn); font-size: 40px; height: 84px; }
+  #startBtn { background: var(--go); font-size: 24px; height: 72px; }
+  #stopBtn { background: var(--stop); font-size: 32px; height: 110px; }
+  #connectBtn { background: var(--accent); font-size: 22px; height: 72px; }
+  #msg { font-size: 14px; color: var(--muted); text-align: center; min-height: 18px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Pad Remote</h1>
+    <div id="status">Not connected</div>
+  </header>
+
+  <div class="stats">
+    <div class="stat big">
+      <div class="label">Speed</div>
+      <div class="value"><span id="speed">0.0</span><span class="unit">mph</span></div>
+      <div id="target">&nbsp;</div>
+    </div>
+    <div class="stat">
+      <div class="label">Distance</div>
+      <div class="value"><span id="dist">0.00</span><span class="unit">mi</span></div>
+    </div>
+    <div class="stat">
+      <div class="label">Time</div>
+      <div class="value" id="time">0:00</div>
+    </div>
+  </div>
+
+  <button id="connectBtn">Connect</button>
+
+  <div class="speed">
+    <button id="downBtn" disabled aria-label="Slower">−</button>
+    <button id="upBtn" disabled aria-label="Faster">+</button>
+  </div>
+  <button id="startBtn" disabled>Start</button>
+  <button id="stopBtn" disabled>STOP</button>
+  <div id="msg"></div>
+
+<script>
+'use strict';
+// PitPat-T01 walking pad over Bluetooth LE.
+// Pad sends a status packet ~every second on FF02; we must answer each one on FF01
+// (a "still here" heartbeat, or a queued command) or the pad drops the link after ~10 s.
+// Writes MUST be with response — the characteristic does not accept write-without-response.
+const SERVICE = 0xffff, WRITE = 0xff01, NOTIFY = 0xff02;
+const MPH = 1609.344;              // pad speed unit is metres/hour (km/h x 1000)
+const MIN_RAW = 1000, STEP_MPH = 0.1;
+let maxRaw = 6000;                 // replaced by the pad's own max once status arrives
+const USER_ID = 58965456623n;
+const HEARTBEAT = [0x05, 0x6a, 0x05, 0xfd, 0xf8, 0x43];
+
+const $ = id => document.getElementById(id);
+let device = null, writeChar = null, seq = 0, pending = null, writing = false;
+let state = 'stopped', targetMph = 1.0, wakeLock = null, userDisconnect = false;
+
+function cmdPacket(cmd, speedRaw, ramp) {
+  const p = new Uint8Array(23);
+  p[0] = 0x6a; p[1] = 0x17;
+  p[6] = (speedRaw >> 8) & 0xff; p[7] = speedRaw & 0xff;
+  p[8] = ramp; p[9] = 0; p[10] = 80; p[11] = 0;
+  p[12] = cmd | 0x08;              // bit 3 = miles mode, matching the pad's setting
+  for (let i = 0; i < 8; i++) p[13 + i] = Number((USER_ID >> BigInt(56 - i * 8)) & 0xffn);
+  let c = 0; for (let i = 1; i <= 20; i++) c ^= p[i];
+  p[21] = c; p[22] = 0x43;
+  return p;
+}
+const START = raw => cmdPacket(4, raw, 1);
+const SET   = raw => cmdPacket(4, raw, 5);
+const STOP  = () => cmdPacket(0, 0, 1);
+
+function mphToRaw(mph) { return Math.max(MIN_RAW, Math.min(maxRaw, Math.round(mph * MPH))); }
+function rawToMph(raw) { return raw / MPH; }
+const minMph = () => Math.ceil(rawToMph(MIN_RAW) * 10) / 10;
+const maxMph = () => Math.floor(rawToMph(maxRaw) * 10) / 10;
+
+function decode(dv) {
+  // outer 4-byte wrapper (4D ..), then inner 0x68 frame
+  if (dv.byteLength < 35 || dv.getUint8(4) !== 0x68) return null;
+  const p = i => dv.getUint8(4 + i);
+  const u16 = i => (p(i) << 8) | p(i + 1);
+  const u32 = i => ((p(i) << 24) >>> 0) + (p(i + 1) << 16) + (p(i + 2) << 8) + p(i + 3);
+  const flags = p(26);
+  const s = { 24: 'starting', 8: 'running', 16: 'paused' }[flags & 24] || 'stopped';
+  return { state: s, speed: u16(3), target: u16(5), dist: u32(7), steps: u32(14),
+           durMs: u32(20), fw: p(25), maxSpeed: u16(27) };
+}
+
+function fmtTime(sec) {
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function render(d) {
+  state = d.state;
+  if (d.maxSpeed >= MIN_RAW && d.maxSpeed <= 20000) maxRaw = d.maxSpeed;
+  $('speed').textContent = rawToMph(d.speed).toFixed(1);
+  $('dist').textContent = (d.dist / MPH).toFixed(2);
+  $('time').textContent = fmtTime(d.fw > 19 ? d.durMs / 1000 : d.durMs);
+  const running = state === 'running' || state === 'starting';
+  if (running && d.target) targetMph = Math.round(rawToMph(d.target) * 10) / 10;
+  $('target').textContent = state === 'starting' ? 'Starting…'
+    : running ? `target ${targetMph.toFixed(1)} mph` : `will start at ${targetMph.toFixed(1)} mph`;
+  $('startBtn').textContent = running ? 'Running' : 'Start';
+  $('startBtn').disabled = running;
+}
+
+function setStatus(text, cls) { const el = $('status'); el.textContent = text; el.className = cls || ''; }
+function setControls(on) {
+  ['upBtn', 'downBtn', 'startBtn', 'stopBtn'].forEach(id => $(id).disabled = !on);
+  $('connectBtn').textContent = on ? 'Disconnect' : 'Connect';
+}
+
+async function send(bytes) {
+  const pkt = new Uint8Array(3 + bytes.length);
+  pkt.set([0x4d, 0x00, seq & 0xff]); pkt.set(bytes, 3);
+  seq = (seq + 1) & 0xff;
+  await writeChar.writeValueWithResponse(pkt);
+}
+
+async function onNotify(ev) {
+  const d = decode(ev.target.value);
+  if (d) render(d);
+  if (writing) return;               // previous write still in flight; answer the next packet
+  writing = true;
+  try {
+    if (pending) {
+      const body = pending; pending = null;
+      await send(Uint8Array.from([body.length, ...body]));
+    } else {
+      await send(Uint8Array.from(HEARTBEAT));
+    }
+  } catch (e) {
+    $('msg').textContent = 'Send failed: ' + e.message;
+  } finally { writing = false; }
+}
+
+function queue(pkt, note) { pending = pkt; $('msg').textContent = note || ''; }
+
+async function connect() {
+  if (!navigator.bluetooth) {
+    $('msg').textContent = 'This browser has no Bluetooth. Use Chrome on Android.';
+    return;
+  }
+  try {
+    setStatus('Connecting…');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'PitPat' }, { namePrefix: 'PITPAT' }],
+      optionalServices: [SERVICE],
+    });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    userDisconnect = false;
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SERVICE);
+    writeChar = await svc.getCharacteristic(WRITE);
+    const notifyChar = await svc.getCharacteristic(NOTIFY);
+    notifyChar.addEventListener('characteristicvaluechanged', onNotify);
+    await notifyChar.startNotifications();
+    setStatus('Connected', 'on');
+    setControls(true);
+    $('msg').textContent = '';
+    keepAwake();
+  } catch (e) {
+    setStatus('Not connected');
+    $('msg').textContent = e.name === 'NotFoundError' ? 'No pad picked. Is the PitPat app closed?' : e.message;
+  }
+}
+
+function onDisconnected() {
+  writeChar = null; pending = null; writing = false;
+  setControls(false);
+  if (userDisconnect) { setStatus('Not connected'); return; }
+  setStatus('LOST CONNECTION', 'warn');
+  $('msg').textContent = 'Lost the pad. Use the pad’s power switch if the belt is still moving.';
+  if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
+}
+
+async function keepAwake() {
+  try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && writeChar) keepAwake();
+});
+
+$('connectBtn').onclick = () => {
+  if (device && device.gatt.connected) { userDisconnect = true; device.gatt.disconnect(); }
+  else connect();
+};
+$('startBtn').onclick = () => queue(START(mphToRaw(targetMph)), 'Starting… (3-second countdown)');
+$('stopBtn').onclick  = () => queue(STOP(), 'Stopping…');
+function nudge(dir) {
+  targetMph = Math.round(Math.min(maxMph(), Math.max(minMph(), targetMph + dir * STEP_MPH)) * 10) / 10;
+  if (state === 'running') queue(SET(mphToRaw(targetMph)));
+  $('target').textContent = state === 'running' ? `target ${targetMph.toFixed(1)} mph`
+    : `will start at ${targetMph.toFixed(1)} mph`;
+}
+$('upBtn').onclick = () => nudge(+1);
+$('downBtn').onclick = () => nudge(-1);
+$('target').textContent = `will start at ${targetMph.toFixed(1)} mph`;
+</script>
+</body>
+</html>
