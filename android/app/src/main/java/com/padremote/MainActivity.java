@@ -39,7 +39,7 @@ public class MainActivity extends Activity {
         findViewById(R.id.up).setOnClickListener(x -> send(PadService.ACTION_UP));
         findViewById(R.id.down).setOnClickListener(x -> send(PadService.ACTION_DOWN));
         findViewById(R.id.history).setOnClickListener(x -> startActivity(new Intent(this, HistoryActivity.class)));
-        findViewById(R.id.settings).setOnClickListener(x -> askWeight());
+        findViewById(R.id.settings).setOnClickListener(x -> askProfile());
         askPermissions();
         if (PadService.ACTION_CONNECT.equals(getIntent().getAction())) send(PadService.ACTION_CONNECT);
     }
@@ -50,24 +50,45 @@ public class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null).show();
     }
 
-    private void askWeight() {
+    private void askProfile() {
         SharedPreferences p = getSharedPreferences("pad", MODE_PRIVATE);
-        int kg = p.getInt("weightKg", PadProtocol.DEFAULT_WEIGHT_KG);
-        EditText in = new EditText(this);
-        in.setInputType(InputType.TYPE_CLASS_NUMBER);
-        in.setText(String.valueOf(Math.round(kg * 2.20462)));
-        in.setSelectAllOnFocus(true);
-        new AlertDialog.Builder(this).setTitle("Your weight (lb)")
-                .setMessage("The pad uses this for its calorie estimate. It takes effect at the next Start.")
-                .setView(in)
+        int kg = Profile.weightKg(this), cm = Profile.heightCm(this);
+        int totalIn = (int) Math.round(cm / 2.54);
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad / 2, pad, 0);
+        EditText lb = field(box, "Weight (lb)", String.valueOf(Math.round(kg * 2.20462)));
+        EditText ft = field(box, "Height: feet", String.valueOf(totalIn / 12));
+        EditText in = field(box, "Height: inches", String.valueOf(totalIn % 12));
+        new AlertDialog.Builder(this).setTitle("Your profile")
+                .setMessage("Used for calories and, if the pad doesn't count them, steps (shown with ~).")
+                .setView(box)
                 .setPositiveButton("Save", (d, w) -> {
                     try {
-                        int lb = Integer.parseInt(in.getText().toString().trim());
-                        int newKg = (int) Math.round(lb / 2.20462);
-                        if (newKg >= 30 && newKg <= 200) p.edit().putInt("weightKg", newKg).apply();
+                        int newKg = (int) Math.round(Integer.parseInt(lb.getText().toString().trim()) / 2.20462);
+                        int inches = Integer.parseInt(ft.getText().toString().trim()) * 12 + Integer.parseInt(in.getText().toString().trim());
+                        int newCm = (int) Math.round(inches * 2.54);
+                        SharedPreferences.Editor ed = p.edit();
+                        if (newKg >= 30 && newKg <= 250) ed.putInt("weightKg", newKg);
+                        if (newCm >= 120 && newCm <= 230) ed.putInt("heightCm", newCm);
+                        ed.apply();
                     } catch (NumberFormatException ignored) {}
                 })
                 .setNegativeButton("Cancel", null).show();
+    }
+
+    private EditText field(android.widget.LinearLayout box, String label, String value) {
+        TextView l = new TextView(this);
+        l.setText(label);
+        l.setTextColor(getColor(R.color.muted));
+        box.addView(l);
+        EditText e = new EditText(this);
+        e.setInputType(InputType.TYPE_CLASS_NUMBER);
+        e.setText(value);
+        e.setSelectAllOnFocus(true);
+        box.addView(e);
+        return e;
     }
 
     private void askPermissions() {
@@ -101,8 +122,9 @@ public class MainActivity extends Activity {
         speed.setText(Fmt.mph(mph));
         dist.setText(Fmt.miles(s.distM / PadProtocol.M_PER_MILE));
         time.setText(Fmt.time(s.durSec));
-        steps.setText(Fmt.count(s.steps));
-        cal.setText(Fmt.count(s.calories));
+        Estimates.Shown e = Profile.shown(this, s);
+        steps.setText(Profile.steps(e));
+        cal.setText(Profile.calories(e));
         target.setText(s.state == PadProtocol.State.STARTING ? "Starting…"
                 : (moving ? "Target " : "Starts at ") + Fmt.mph(PadService.targetMph) + " mph");
         double avg = s.durSec > 0 ? (s.distM / PadProtocol.M_PER_MILE) / (s.durSec / 3600.0) : 0;

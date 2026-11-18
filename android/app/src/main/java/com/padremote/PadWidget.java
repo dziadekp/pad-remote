@@ -56,19 +56,19 @@ public class PadWidget extends AppWidgetProvider {
         v.setTextViewText(R.id.w_speed, Fmt.mph(on ? PadProtocol.rawToMph(s.speedRaw) : 0));
         v.setTextColor(R.id.w_speed, ctx.getColor(moving ? R.color.go : R.color.text));
         v.setTextViewText(R.id.w_dist, Fmt.miles(s.distM / PadProtocol.M_PER_MILE));
-        v.setTextViewText(R.id.w_time, Fmt.time(s.durSec));
-        v.setTextViewText(R.id.w_status, on ? PadService.stateWord(s.state) : shortLink());
+        Estimates.Shown e = Profile.shown(ctx, s);
+        v.setTextViewText(R.id.w_steps, Profile.steps(e));
+        v.setTextViewText(R.id.w_cal, Profile.calories(e));
+        String state = on ? PadService.stateWord(s.state) : shortLink();
+        if (tall) {
+            v.setTextViewText(R.id.w_time, Fmt.time(s.durSec));
+            v.setTextViewText(R.id.w_status, state);
+        } else {   // compact has no time tile; time rides along in the status line
+            v.setTextViewText(R.id.w_status, on && s.durSec > 0 ? state + " · " + Fmt.time(s.durSec) : state);
+        }
         v.setTextColor(R.id.w_dot, ctx.getColor(!on ? R.color.muted : moving ? R.color.go : R.color.accent));
         if (tall) {
             v.setTextViewText(R.id.w_target, (moving ? "Target " : "Starts at ") + Fmt.mph(PadService.targetMph) + " mph");
-            if (s.steps > 0) {
-                v.setTextViewText(R.id.w_third, Fmt.count(s.steps));
-                v.setTextViewText(R.id.w_third_label, "STEPS");
-            } else {
-                double avg = s.durSec > 0 ? (s.distM / PadProtocol.M_PER_MILE) / (s.durSec / 3600.0) : 0;
-                v.setTextViewText(R.id.w_third, Fmt.mph(avg));
-                v.setTextViewText(R.id.w_third_label, "AVG MPH");
-            }
         }
         v.setTextViewText(R.id.w_start, moving ? "Running" : "Start");
         v.setInt(R.id.w_start, "setBackgroundResource", moving ? R.drawable.bg_tile : R.drawable.bg_go);

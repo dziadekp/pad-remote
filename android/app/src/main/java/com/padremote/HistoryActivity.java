@@ -141,8 +141,8 @@ public class HistoryActivity extends Activity {
 
             StringBuilder sb = new StringBuilder();
             sb.append("avg ").append(Fmt.mph(s.avgMph())).append(" mph");
-            if (s.steps > 0) sb.append(" · ").append(Fmt.count(s.steps)).append(" steps");
-            if (s.calories > 0) sb.append(" · ").append(s.calories).append(" kcal");
+            if (s.steps > 0) sb.append(" · ").append((s.estFlags & 1) != 0 ? "~" : "").append(Fmt.count(s.steps)).append(" steps");
+            if (s.calories > 0) sb.append(" · ").append((s.estFlags & 2) != 0 ? "~" : "").append(s.calories).append(" kcal");
             card.addView(text(sb.toString(), 14, R.color.muted, false));
             return card;
         }

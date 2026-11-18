@@ -15,6 +15,8 @@ public final class SessionTracker {
         public int calories;
         public double maxMph;
         public String endedBy = "";
+        /** Set on sessions read back from history: bit 0 = steps estimated, bit 1 = calories estimated. */
+        public int estFlags;
 
         public double avgMph() { return durSec > 0 ? (distM / PadProtocol.M_PER_MILE) / (durSec / 3600.0) : 0; }
         public double miles() { return distM / PadProtocol.M_PER_MILE; }

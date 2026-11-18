@@ -283,10 +283,10 @@ public class PadService extends Service {
 
     private void saveSession(SessionTracker.Session done) {
         if (done == null) return;
-        try { SessionStore.get(this).save(done); } catch (Exception e) { Log.w(TAG, "save failed", e); }
+        try { SessionStore.get(this).save(done, Profile.weightKg(this), Profile.heightCm(this)); } catch (Exception e) { Log.w(TAG, "save failed", e); }
     }
 
-    private int weightKg() { return prefs().getInt("weightKg", PadProtocol.DEFAULT_WEIGHT_KG); }
+    private int weightKg() { return Profile.weightKg(this); }
 
     private void onLinkLost(BluetoothGatt g) {
         boolean wasMoving = status.state == PadProtocol.State.RUNNING || status.state == PadProtocol.State.STARTING;
