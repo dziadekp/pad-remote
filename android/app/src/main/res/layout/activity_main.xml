@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- fitsSystemWindows replaces a view's own padding with the system insets, so it sits on an outer frame -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:paddingHorizontal="16dp" android:paddingTop="12dp" android:paddingBottom="16dp"
     android:background="@color/bg" android:fitsSystemWindows="true">
+<LinearLayout
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:paddingHorizontal="16dp" android:paddingTop="12dp" android:paddingBottom="16dp">
 
     <!-- top bar -->
     <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:orientation="horizontal" android:gravity="center_vertical">
@@ -69,3 +72,4 @@
     <Button android:id="@+id/stop" android:layout_width="match_parent" android:layout_height="96dp" android:layout_marginTop="10dp"
         android:text="STOP" android:textSize="30sp" android:textStyle="bold" android:letterSpacing="0.1" android:textColor="@color/text" android:background="@drawable/bg_stop" />
 </LinearLayout>
+</FrameLayout>

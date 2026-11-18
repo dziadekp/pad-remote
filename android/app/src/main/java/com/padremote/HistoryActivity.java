@@ -31,9 +31,11 @@ public class HistoryActivity extends Activity {
         super.onCreate(b);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setFitsSystemWindows(true);
         root.setPadding(dp(16), dp(12), dp(16), 0);
-        root.setBackgroundColor(getColor(R.color.bg));
+        // fitsSystemWindows overwrites a view's padding with the insets, so it goes on an outer frame
+        android.widget.FrameLayout frame = new android.widget.FrameLayout(this);
+        frame.setFitsSystemWindows(true);
+        frame.setBackgroundColor(getColor(R.color.bg));
 
         LinearLayout bar = row();
         bar.setGravity(Gravity.CENTER_VERTICAL);
@@ -65,7 +67,8 @@ public class HistoryActivity extends Activity {
             return true;
         });
         root.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
-        setContentView(root);
+        frame.addView(root);
+        setContentView(frame);
     }
 
     @Override protected void onResume() { super.onResume(); reload(); }

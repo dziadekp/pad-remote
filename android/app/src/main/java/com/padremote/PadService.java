@@ -71,7 +71,12 @@ public class PadService extends Service {
     private byte[] pending;           // command waiting for the next status frame
     private String pendingAfterConnect;
     private boolean writing, userClosing, ready;
-    private int seq, frames;
+    // The pad drops the link ~10 s later unless every status frame gets exactly one reply, numbered
+    // 0, 1, 2… from the start of THIS connection (proven on the pad 2026-11-18). So: reset seq on
+    // every connection, and if a frame arrives while a write is in flight, owe the reply, don't skip it.
+    private int seq, owed;
+    private int frames, writesDone, retries, chunks;
+    private static final int MAX_RETRIES = 3;
     private long stoppedSince = 0;
     private final PadProtocol.Assembler assembler = new PadProtocol.Assembler();
     private final SessionTracker tracker = new SessionTracker();
@@ -175,6 +180,7 @@ public class PadService extends Service {
 
     private final BluetoothGattCallback gattCb = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt g, int st, int newState) {
+            Log.i(TAG, "connState=" + newState + " status=" + st);
             main.post(() -> {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     // Ask for big packets so a 56-byte status frame arrives whole.
@@ -200,8 +206,10 @@ public class PadService extends Service {
             });
         }
         @Override public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor d, int st) {
+            Log.i(TAG, "notify on, status=" + st);
             main.post(() -> {
-                writing = false; ready = true; connected = true; link = "Connected";
+                writing = false; ready = true; connected = true; link = "Connected"; retries = 0;
+                frames = 0; writesDone = 0; chunks = 0; seq = 0; owed = 0;
                 if (pendingAfterConnect != null) { String a = pendingAfterConnect; pendingAfterConnect = null; handle(a); }
                 publish();
             });
@@ -217,15 +225,17 @@ public class PadService extends Service {
             main.post(() -> onFrame(v));
         }
         @Override public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int st) {
-            main.post(() -> writing = false);
+            if (st != 0 || writesDone++ < 4) Log.i(TAG, "write done status=" + st);
+            main.post(() -> { writing = false; reply(); });
         }
     };
 
     private void onFrame(byte[] chunk) {
+        if (chunks++ < 6) Log.i(TAG, "chunk " + chunks + " len=" + chunk.length + " head=" + hex(chunk, 6) + " writing=" + writing);
         byte[] v = assembler.push(chunk);
         if (v == null) return;                 // wait for the rest of the frame
         PadProtocol.Status s = PadProtocol.decode(v);
-        if (frames++ % 20 == 0) Log.i(TAG, "frame len=" + v.length + " decoded=" + (s == null ? "no"
+        if (frames++ % 20 == 0 || frames <= 4) Log.i(TAG, "frame len=" + v.length + " decoded=" + (s == null ? "no"
                 : s.state + " speed=" + s.speedRaw + " dist=" + s.distM + " dur=" + s.durSec + " steps=" + s.steps
                 + " cal=" + s.calories + " hr=" + s.heartRate));
         if (s != null) {
@@ -237,15 +247,18 @@ public class PadService extends Service {
             if (moving) stoppedSince = 0; else if (stoppedSince == 0) stoppedSince = now;
             if (stoppedSince > 0 && now - stoppedSince > IDLE_OFF_MS && pending == null) { closeAll(true); return; }
         }
+        owed++;
         reply();
         publish();
     }
 
     @SuppressWarnings("deprecation")
     private void reply() {
-        if (writing || gatt == null || writeChar == null) return;
+        if (writing || owed <= 0 || gatt == null || writeChar == null) return;
+        owed--;
         byte[] body = pending; pending = null;
         byte[] pkt = PadProtocol.frame(seq++ & 0xff, body);
+        if (body != null || writesDone < 4) Log.i(TAG, "send " + hex(pkt, 6) + (body != null ? " CMD" : ""));
         writing = true;
         boolean ok;
         if (Build.VERSION.SDK_INT >= 33) {
@@ -255,7 +268,17 @@ public class PadService extends Service {
             writeChar.setValue(pkt);
             ok = gatt.writeCharacteristic(writeChar);
         }
-        if (!ok) { writing = false; if (body != null) pending = body; } // retry on the next frame
+        if (!ok) {   // not sent: put the reply back so the numbering stays in step; retry on the next event
+            Log.w(TAG, "write refused");
+            writing = false; seq--; owed++;
+            if (body != null) pending = body;
+        }
+    }
+
+    private static String hex(byte[] b, int n) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < Math.min(n, b.length); i++) sb.append(String.format("%02x", b[i]));
+        return sb.toString();
     }
 
     private void saveSession(SessionTracker.Session done) {
@@ -266,21 +289,30 @@ public class PadService extends Service {
     private int weightKg() { return prefs().getInt("weightKg", PadProtocol.DEFAULT_WEIGHT_KG); }
 
     private void onLinkLost(BluetoothGatt g) {
-        saveSession(tracker.onLinkLost(System.currentTimeMillis()));
         boolean wasMoving = status.state == PadProtocol.State.RUNNING || status.state == PadProtocol.State.STARTING;
         boolean wasReady = ready;
         closeGatt();
-        if (userClosing) return;
+        if (userClosing) { saveSession(tracker.onLinkLost(System.currentTimeMillis())); return; }
         if (wasReady && wasMoving) {
-            alert("Lost the walking pad", "The belt may still be moving. Use the pad's power switch.");
+            alert("Lost the walking pad", "Reconnecting… If the belt keeps moving, use the pad's power switch.");
         }
+        // Try to get the link (and STOP) back. A reconnect mid-walk continues the same session.
+        if (retries < MAX_RETRIES) {
+            retries++;
+            Log.i(TAG, "link lost, retry " + retries);
+            link = "Reconnecting…"; publish();
+            main.removeCallbacksAndMessages(null);
+            main.postDelayed(this::connect, 1500);
+            return;
+        }
+        saveSession(tracker.onLinkLost(System.currentTimeMillis()));
         fail(wasReady ? "Connection lost" : "Couldn't connect");
     }
 
     // ---------------- lifecycle / UI ----------------
 
     private void closeGatt() {
-        ready = false; connected = false; writing = false; pending = null; writeChar = null;
+        ready = false; connected = false; writing = false; pending = null; writeChar = null; seq = 0; owed = 0;
         if (gatt != null) { try { gatt.disconnect(); gatt.close(); } catch (Exception ignored) {} }
         gatt = null;
     }
