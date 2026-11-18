@@ -40,6 +40,19 @@ public class PadProtocolTest {
         assertEquals(338, s.distM);
         assertEquals(6000, s.maxRaw);
     }
+    @Test public void assemblesFrameSplitInto20BytePieces() {
+        String hex = "4d040134683400000000000000015200000000000000000000000000351b82177000050074434d6c3133455658324663363333300e02eb43";
+        byte[] full = unhex(hex);
+        PadProtocol.Assembler a = new PadProtocol.Assembler();
+        assertNull(a.push(java.util.Arrays.copyOfRange(full, 0, 20)));
+        assertNull(a.push(java.util.Arrays.copyOfRange(full, 20, 40)));
+        byte[] out = a.push(java.util.Arrays.copyOfRange(full, 40, full.length));
+        assertEquals(hex, hex(out));
+        assertEquals(338, PadProtocol.decode(out).distM);
+        // a whole frame in one piece (big packets) also passes straight through
+        assertEquals(hex, hex(a.push(full)));
+    }
+
     @Test public void speedConversionMatchesDisplay() {
         assertEquals(1000, PadProtocol.mphToRaw(0.6, 6000));
         assertEquals(6000, PadProtocol.mphToRaw(9.0, 6000));

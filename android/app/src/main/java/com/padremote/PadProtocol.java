@@ -85,6 +85,30 @@ public final class PadProtocol {
         return s;
     }
 
+    /**
+     * Android's default Bluetooth packet size cuts the pad's 56-byte status frame into 20-byte
+     * pieces. This glues pieces back together. Outer frame: 4D xx seq len, then len bytes.
+     */
+    public static final class Assembler {
+        private final byte[] buf = new byte[512];
+        private int n = 0;
+
+        /** Returns a complete frame, or null while still waiting for more pieces. */
+        public byte[] push(byte[] chunk) {
+            if (chunk.length > 0 && (chunk[0] & 0xff) == 0x4d) n = 0;   // a new frame starts here
+            else if (n == 0) return null;                              // stray tail; skip it
+            if (n + chunk.length > buf.length) { n = 0; return null; }
+            System.arraycopy(chunk, 0, buf, n, chunk.length);
+            n += chunk.length;
+            if (n < 4) return null;
+            int total = 4 + (buf[3] & 0xff);
+            if (n < total) return null;
+            byte[] out = java.util.Arrays.copyOf(buf, total);
+            n = 0;
+            return out;
+        }
+    }
+
     public static int mphToRaw(double mph, int maxRaw) {
         return (int) Math.max(MIN_RAW, Math.min(maxRaw, Math.round(mph * M_PER_MILE)));
     }

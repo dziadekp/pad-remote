@@ -31,6 +31,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.ParcelUuid;
 import android.os.VibrationEffect;
+import android.util.Log;
 import android.os.Vibrator;
 
 import java.util.Collections;
@@ -70,8 +71,10 @@ public class PadService extends Service {
     private byte[] pending;           // command waiting for the next status frame
     private String pendingAfterConnect;
     private boolean writing, userClosing, ready;
-    private int seq;
+    private int seq, frames;
     private long stoppedSince = 0;
+    private final PadProtocol.Assembler assembler = new PadProtocol.Assembler();
+    private static final String TAG = "PadRemote";
 
     @Override public IBinder onBind(Intent i) { return null; }
 
@@ -172,9 +175,16 @@ public class PadService extends Service {
     private final BluetoothGattCallback gattCb = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt g, int st, int newState) {
             main.post(() -> {
-                if (newState == BluetoothProfile.STATE_CONNECTED) { g.discoverServices(); }
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    // Ask for big packets so a 56-byte status frame arrives whole.
+                    if (!g.requestMtu(247)) g.discoverServices();
+                }
                 else if (newState == BluetoothProfile.STATE_DISCONNECTED) onLinkLost(g);
             });
+        }
+        @Override public void onMtuChanged(BluetoothGatt g, int mtu, int st) {
+            Log.i(TAG, "mtu=" + mtu + " status=" + st);
+            main.post(g::discoverServices);
         }
         @Override public void onServicesDiscovered(BluetoothGatt g, int st) {
             main.post(() -> {
@@ -210,8 +220,12 @@ public class PadService extends Service {
         }
     };
 
-    private void onFrame(byte[] v) {
+    private void onFrame(byte[] chunk) {
+        byte[] v = assembler.push(chunk);
+        if (v == null) return;                 // wait for the rest of the frame
         PadProtocol.Status s = PadProtocol.decode(v);
+        if (frames++ % 10 == 0) Log.i(TAG, "frame len=" + v.length + " chunk=" + chunk.length
+                + " decoded=" + (s == null ? "no" : s.state + " speed=" + s.speedRaw + " dist=" + s.distM));
         if (s != null) {
             boolean moving = s.state == PadProtocol.State.RUNNING || s.state == PadProtocol.State.STARTING;
             if (moving && s.targetRaw > 0) targetMph = Math.round(PadProtocol.rawToMph(s.targetRaw) * 10) / 10.0;

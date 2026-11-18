@@ -32,6 +32,7 @@ public class MainActivity extends Activity {
         findViewById(R.id.up).setOnClickListener(x -> send(PadService.ACTION_UP));
         findViewById(R.id.down).setOnClickListener(x -> send(PadService.ACTION_DOWN));
         askPermissions();
+        if (PadService.ACTION_CONNECT.equals(getIntent().getAction())) send(PadService.ACTION_CONNECT);
     }
 
     private void askPermissions() {
