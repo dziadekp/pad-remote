@@ -6,12 +6,23 @@ import android.appwidget.AppWidgetProvider;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
+import android.os.Bundle;
+import android.util.SizeF;
 import android.widget.RemoteViews;
 
-/** Home-screen widget: live speed / distance / time / steps plus − Start STOP + buttons. */
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Home-screen widget. Two layouts: compact (2 rows) and tall (3+ rows, big centred speed plus
+ * stat tiles). On Android 12+ the launcher picks the one that fits the widget's current size.
+ */
 public class PadWidget extends AppWidgetProvider {
 
     @Override public void onUpdate(Context ctx, AppWidgetManager mgr, int[] ids) { refresh(ctx); }
+
+    @Override public void onAppWidgetOptionsChanged(Context ctx, AppWidgetManager mgr, int id, Bundle opts) { refresh(ctx); }
 
     static PendingIntent action(Context ctx, String action) {
         Intent i = new Intent(ctx, PadService.class).setAction(action);
@@ -23,21 +34,44 @@ public class PadWidget extends AppWidgetProvider {
         AppWidgetManager mgr = AppWidgetManager.getInstance(ctx);
         ComponentName me = new ComponentName(ctx, PadWidget.class);
         if (mgr.getAppWidgetIds(me).length == 0) return;
-        RemoteViews v = new RemoteViews(ctx.getPackageName(), R.layout.widget);
+        RemoteViews compact = fill(ctx, new RemoteViews(ctx.getPackageName(), R.layout.widget), false);
+        RemoteViews tall = fill(ctx, new RemoteViews(ctx.getPackageName(), R.layout.widget_tall), true);
+        RemoteViews views;
+        if (Build.VERSION.SDK_INT >= 31) {
+            Map<SizeF, RemoteViews> bySize = new HashMap<>();
+            bySize.put(new SizeF(200f, 90f), compact);
+            bySize.put(new SizeF(200f, 210f), tall);
+            views = new RemoteViews(bySize);
+        } else {
+            views = compact;
+        }
+        mgr.updateAppWidget(me, views);
+    }
+
+    private static RemoteViews fill(Context ctx, RemoteViews v, boolean tall) {
         PadProtocol.Status s = PadService.status;
         boolean on = PadService.connected;
         boolean moving = s.state == PadProtocol.State.RUNNING || s.state == PadProtocol.State.STARTING;
 
         v.setTextViewText(R.id.w_speed, Fmt.mph(on ? PadProtocol.rawToMph(s.speedRaw) : 0));
-        v.setTextViewText(R.id.w_dist, Fmt.miles(s.distM / PadProtocol.M_PER_MILE) + " mi");
+        v.setTextColor(R.id.w_speed, ctx.getColor(moving ? R.color.go : R.color.text));
+        v.setTextViewText(R.id.w_dist, Fmt.miles(s.distM / PadProtocol.M_PER_MILE));
         v.setTextViewText(R.id.w_time, Fmt.time(s.durSec));
-        v.setTextViewText(R.id.w_extra, on && (s.steps > 0 || s.calories > 0)
-                ? Fmt.count(s.steps) + " steps · " + s.calories + " kcal" : "");
-        v.setTextViewText(R.id.w_status, on ? PadService.stateWord(s.state) : PadService.link);
-        v.setTextViewText(R.id.w_target, (moving ? "→ " : "starts at ") + Fmt.mph(PadService.targetMph));
+        v.setTextViewText(R.id.w_status, on ? PadService.stateWord(s.state) : shortLink());
         v.setTextColor(R.id.w_dot, ctx.getColor(!on ? R.color.muted : moving ? R.color.go : R.color.accent));
+        if (tall) {
+            v.setTextViewText(R.id.w_target, (moving ? "Target " : "Starts at ") + Fmt.mph(PadService.targetMph) + " mph");
+            if (s.steps > 0) {
+                v.setTextViewText(R.id.w_third, Fmt.count(s.steps));
+                v.setTextViewText(R.id.w_third_label, "STEPS");
+            } else {
+                double avg = s.durSec > 0 ? (s.distM / PadProtocol.M_PER_MILE) / (s.durSec / 3600.0) : 0;
+                v.setTextViewText(R.id.w_third, Fmt.mph(avg));
+                v.setTextViewText(R.id.w_third_label, "AVG MPH");
+            }
+        }
         v.setTextViewText(R.id.w_start, moving ? "Running" : "Start");
-        v.setInt(R.id.w_start, "setBackgroundResource", moving ? R.drawable.bg_btn : R.drawable.bg_go);
+        v.setInt(R.id.w_start, "setBackgroundResource", moving ? R.drawable.bg_tile : R.drawable.bg_go);
 
         v.setOnClickPendingIntent(R.id.w_down, action(ctx, PadService.ACTION_DOWN));
         v.setOnClickPendingIntent(R.id.w_up, action(ctx, PadService.ACTION_UP));
@@ -45,6 +79,13 @@ public class PadWidget extends AppWidgetProvider {
         v.setOnClickPendingIntent(R.id.w_stop, action(ctx, PadService.ACTION_STOP));
         v.setOnClickPendingIntent(R.id.w_info, PendingIntent.getActivity(ctx, 0,
                 new Intent(ctx, MainActivity.class), PendingIntent.FLAG_IMMUTABLE));
-        mgr.updateAppWidget(me, v);
+        return v;
+    }
+
+    /** The pill is small; keep the not-connected text short. */
+    private static String shortLink() {
+        String l = PadService.link;
+        if (l == null || l.startsWith("Not connected")) return "Not connected";
+        return l.length() > 22 ? l.substring(0, 21) + "…" : l;
     }
 }
