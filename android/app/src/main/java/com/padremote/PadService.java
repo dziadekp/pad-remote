@@ -1,0 +1,353 @@
+package com.padremote;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanFilter;
+import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
+import android.os.Build;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.ParcelUuid;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+
+import java.util.Collections;
+
+/**
+ * Holds the Bluetooth link to the pad while it is in use. Widget buttons, the app and the
+ * notification all send it actions. Every status frame from the pad gets exactly one reply:
+ * the queued command if there is one, otherwise a heartbeat.
+ */
+@SuppressLint("MissingPermission") // permissions are checked in hasBtPermission() before any BLE call
+public class PadService extends Service {
+    public static final String ACTION_CONNECT = "com.padremote.CONNECT";
+    public static final String ACTION_START = "com.padremote.START";
+    public static final String ACTION_STOP = "com.padremote.STOP";
+    public static final String ACTION_UP = "com.padremote.UP";
+    public static final String ACTION_DOWN = "com.padremote.DOWN";
+    public static final String ACTION_DISCONNECT = "com.padremote.DISCONNECT";
+
+    private static final String CHANNEL = "pad";
+    private static final String CHANNEL_ALERT = "pad_alert";
+    private static final int NOTIF_ID = 1, ALERT_ID = 2;
+    private static final long SCAN_TIMEOUT_MS = 15_000;
+    private static final long IDLE_OFF_MS = 10 * 60_000;   // let go of the pad after 10 min stopped
+    private static final double STEP_MPH = 0.1;
+
+    // ---- state shared with the widget and activity (main thread only) ----
+    public static volatile boolean connected = false;
+    public static volatile String link = "Not connected";
+    public static volatile PadProtocol.Status status = new PadProtocol.Status();
+    public static volatile double targetMph = 1.0;
+
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private BluetoothGatt gatt;
+    private BluetoothGattCharacteristic writeChar;
+    private BluetoothLeScanner scanner;
+    private ScanCallback scanCb;
+    private byte[] pending;           // command waiting for the next status frame
+    private String pendingAfterConnect;
+    private boolean writing, userClosing, ready;
+    private int seq;
+    private long stoppedSince = 0;
+
+    @Override public IBinder onBind(Intent i) { return null; }
+
+    @Override public void onCreate() {
+        super.onCreate();
+        targetMph = prefs().getFloat("targetMph", 1.0f);
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Pad connection", NotificationManager.IMPORTANCE_LOW));
+        NotificationChannel alert = new NotificationChannel(CHANNEL_ALERT, "Pad alerts", NotificationManager.IMPORTANCE_HIGH);
+        alert.enableVibration(true);
+        nm.createNotificationChannel(alert);
+    }
+
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        goForeground();
+        String action = intent != null && intent.getAction() != null ? intent.getAction() : ACTION_CONNECT;
+        if (!hasBtPermission()) {
+            link = "Open Pad Remote to allow Bluetooth";
+            publish();
+            stopSelfSoon();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_DISCONNECT.equals(action)) { closeAll(true); return START_NOT_STICKY; }
+        if (!ready) {
+            if (!ACTION_CONNECT.equals(action) && !ACTION_STOP.equals(action)) pendingAfterConnect = action;
+            if (gatt == null && scanCb == null) connect();
+            publish();
+            return START_NOT_STICKY;
+        }
+        handle(action);
+        return START_NOT_STICKY;
+    }
+
+    private void handle(String action) {
+        PadProtocol.Status s = status;
+        boolean moving = s.state == PadProtocol.State.RUNNING || s.state == PadProtocol.State.STARTING;
+        switch (action) {
+            case ACTION_START:
+                pending = PadProtocol.start(PadProtocol.mphToRaw(targetMph, s.maxRaw));
+                break;
+            case ACTION_STOP:
+                pending = PadProtocol.stop();
+                break;
+            case ACTION_UP:
+            case ACTION_DOWN:
+                double minMph = Math.ceil(PadProtocol.rawToMph(PadProtocol.MIN_RAW) * 10) / 10;
+                double maxMph = Math.floor(PadProtocol.rawToMph(s.maxRaw) * 10) / 10;
+                double t = targetMph + (ACTION_UP.equals(action) ? STEP_MPH : -STEP_MPH);
+                targetMph = Math.round(Math.max(minMph, Math.min(maxMph, t)) * 10) / 10.0;
+                prefs().edit().putFloat("targetMph", (float) targetMph).apply();
+                if (moving) pending = PadProtocol.setSpeed(PadProtocol.mphToRaw(targetMph, s.maxRaw));
+                break;
+        }
+        publish();
+    }
+
+    // ---------------- Bluetooth ----------------
+
+    private void connect() {
+        BluetoothAdapter ad = getSystemService(BluetoothManager.class).getAdapter();
+        if (ad == null || !ad.isEnabled()) { link = "Bluetooth is off"; publish(); stopSelfSoon(); return; }
+        link = "Connecting…"; publish();
+        String addr = prefs().getString("addr", null);
+        if (addr != null) { openGatt(ad.getRemoteDevice(addr)); return; }
+        scanner = ad.getBluetoothLeScanner();
+        scanCb = new ScanCallback() {
+            @Override public void onScanResult(int type, ScanResult r) {
+                String name = r.getDevice().getName();
+                if (r.getScanRecord() != null && r.getScanRecord().getDeviceName() != null) name = r.getScanRecord().getDeviceName();
+                if (name != null && name.toLowerCase().startsWith("pitpat")) {
+                    stopScan();
+                    prefs().edit().putString("addr", r.getDevice().getAddress()).apply();
+                    openGatt(r.getDevice());
+                }
+            }
+            @Override public void onScanFailed(int code) { stopScan(); fail("Scan failed (" + code + ")"); }
+        };
+        ScanFilter f = new ScanFilter.Builder().setServiceUuid(new ParcelUuid(PadProtocol.SERVICE)).build();
+        scanner.startScan(Collections.singletonList(f),
+                new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scanCb);
+        main.postDelayed(() -> { if (scanCb != null) { stopScan(); fail("Pad not found. Is it on, and the PitPat app closed?"); } }, SCAN_TIMEOUT_MS);
+    }
+
+    private void stopScan() {
+        if (scanner != null && scanCb != null) try { scanner.stopScan(scanCb); } catch (Exception ignored) {}
+        scanCb = null;
+    }
+
+    private void openGatt(BluetoothDevice dev) {
+        userClosing = false;
+        gatt = dev.connectGatt(this, false, gattCb, BluetoothDevice.TRANSPORT_LE);
+        // If a saved address never answers (pad replaced), forget it so the next try scans.
+        main.postDelayed(() -> {
+            if (!ready && gatt != null) { prefs().edit().remove("addr").apply(); closeGatt(); fail("Pad didn't answer. Is it on, and the PitPat app closed?"); }
+        }, SCAN_TIMEOUT_MS);
+    }
+
+    private final BluetoothGattCallback gattCb = new BluetoothGattCallback() {
+        @Override public void onConnectionStateChange(BluetoothGatt g, int st, int newState) {
+            main.post(() -> {
+                if (newState == BluetoothProfile.STATE_CONNECTED) { g.discoverServices(); }
+                else if (newState == BluetoothProfile.STATE_DISCONNECTED) onLinkLost(g);
+            });
+        }
+        @Override public void onServicesDiscovered(BluetoothGatt g, int st) {
+            main.post(() -> {
+                if (g.getService(PadProtocol.SERVICE) == null) { fail("This isn't the walking pad"); closeGatt(); return; }
+                writeChar = g.getService(PadProtocol.SERVICE).getCharacteristic(PadProtocol.WRITE);
+                BluetoothGattCharacteristic n = g.getService(PadProtocol.SERVICE).getCharacteristic(PadProtocol.NOTIFY);
+                g.setCharacteristicNotification(n, true);
+                BluetoothGattDescriptor d = n.getDescriptor(PadProtocol.CCCD);
+                writing = true;
+                if (Build.VERSION.SDK_INT >= 33) g.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
+                else { d.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE); g.writeDescriptor(d); }
+            });
+        }
+        @Override public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor d, int st) {
+            main.post(() -> {
+                writing = false; ready = true; connected = true; link = "Connected";
+                if (pendingAfterConnect != null) { String a = pendingAfterConnect; pendingAfterConnect = null; handle(a); }
+                publish();
+            });
+        }
+        @Override public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value) {
+            byte[] v = value.clone();
+            main.post(() -> onFrame(v));
+        }
+        @SuppressWarnings("deprecation")
+        @Override public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c) {
+            if (Build.VERSION.SDK_INT >= 33) return; // the 3-arg version handles it
+            byte[] v = c.getValue().clone();
+            main.post(() -> onFrame(v));
+        }
+        @Override public void onCharacteristicWrite(BluetoothGatt g, BluetoothGattCharacteristic c, int st) {
+            main.post(() -> writing = false);
+        }
+    };
+
+    private void onFrame(byte[] v) {
+        PadProtocol.Status s = PadProtocol.decode(v);
+        if (s != null) {
+            boolean moving = s.state == PadProtocol.State.RUNNING || s.state == PadProtocol.State.STARTING;
+            if (moving && s.targetRaw > 0) targetMph = Math.round(PadProtocol.rawToMph(s.targetRaw) * 10) / 10.0;
+            status = s;
+            long now = System.currentTimeMillis();
+            if (moving) stoppedSince = 0; else if (stoppedSince == 0) stoppedSince = now;
+            if (stoppedSince > 0 && now - stoppedSince > IDLE_OFF_MS && pending == null) { closeAll(true); return; }
+        }
+        reply();
+        publish();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void reply() {
+        if (writing || gatt == null || writeChar == null) return;
+        byte[] body = pending; pending = null;
+        byte[] pkt = PadProtocol.frame(seq++ & 0xff, body);
+        writing = true;
+        boolean ok;
+        if (Build.VERSION.SDK_INT >= 33) {
+            ok = gatt.writeCharacteristic(writeChar, pkt, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == 0;
+        } else {
+            writeChar.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            writeChar.setValue(pkt);
+            ok = gatt.writeCharacteristic(writeChar);
+        }
+        if (!ok) { writing = false; if (body != null) pending = body; } // retry on the next frame
+    }
+
+    private void onLinkLost(BluetoothGatt g) {
+        boolean wasMoving = status.state == PadProtocol.State.RUNNING || status.state == PadProtocol.State.STARTING;
+        boolean wasReady = ready;
+        closeGatt();
+        if (userClosing) return;
+        if (wasReady && wasMoving) {
+            alert("Lost the walking pad", "The belt may still be moving. Use the pad's power switch.");
+        }
+        fail(wasReady ? "Connection lost" : "Couldn't connect");
+    }
+
+    // ---------------- lifecycle / UI ----------------
+
+    private void closeGatt() {
+        ready = false; connected = false; writing = false; pending = null; writeChar = null;
+        if (gatt != null) { try { gatt.disconnect(); gatt.close(); } catch (Exception ignored) {} }
+        gatt = null;
+    }
+
+    private void closeAll(boolean byUser) {
+        userClosing = byUser;
+        stopScan();
+        closeGatt();
+        link = "Not connected";
+        status = new PadProtocol.Status();
+        publish();
+        stopSelfSoon();
+    }
+
+    private void fail(String why) {
+        link = why; connected = false; publish(); stopSelfSoon();
+    }
+
+    private void stopSelfSoon() {
+        main.removeCallbacksAndMessages(null);
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        stopSelf();
+    }
+
+    private void alert(String title, String text) {
+        Vibrator vib = getSystemService(Vibrator.class);
+        if (vib != null) vib.vibrate(VibrationEffect.createWaveform(new long[]{0, 400, 200, 400, 200, 400}, -1));
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+        Notification n = new Notification.Builder(this, CHANNEL_ALERT)
+                .setSmallIcon(R.drawable.ic_pad).setContentTitle(title).setContentText(text)
+                .setContentIntent(openApp()).setAutoCancel(true).build();
+        getSystemService(NotificationManager.class).notify(ALERT_ID, n);
+    }
+
+    private void goForeground() {
+        Notification n = buildNotification();
+        if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+        else startForeground(NOTIF_ID, n);
+    }
+
+    private Notification buildNotification() {
+        PadProtocol.Status s = status;
+        String text = connected
+                ? String.format("%s · %.1f mph · %.2f mi", stateWord(s.state), PadProtocol.rawToMph(s.speedRaw), s.distM / PadProtocol.M_PER_MILE)
+                : link;
+        return new Notification.Builder(this, CHANNEL)
+                .setSmallIcon(R.drawable.ic_pad)
+                .setContentTitle("Walking pad")
+                .setContentText(text)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setContentIntent(openApp())
+                .addAction(new Notification.Action.Builder(null, "STOP", PadWidget.action(this, ACTION_STOP)).build())
+                .addAction(new Notification.Action.Builder(null, "Disconnect", PadWidget.action(this, ACTION_DISCONNECT)).build())
+                .build();
+    }
+
+    private PendingIntent openApp() {
+        return PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    private void publish() {
+        PadWidget.refresh(this);
+        if (gatt != null || scanCb != null) {
+            getSystemService(NotificationManager.class).notify(NOTIF_ID, buildNotification());
+        }
+    }
+
+    public static String stateWord(PadProtocol.State st) {
+        switch (st) {
+            case RUNNING: return "Running";
+            case STARTING: return "Starting…";
+            case PAUSED: return "Paused";
+            default: return "Stopped";
+        }
+    }
+
+    private boolean hasBtPermission() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            return checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED;
+        }
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private SharedPreferences prefs() { return getSharedPreferences("pad", Context.MODE_PRIVATE); }
+
+    @Override public void onDestroy() {
+        stopScan();
+        closeGatt();
+        link = "Not connected";
+        PadWidget.refresh(this);
+        super.onDestroy();
+    }
+}

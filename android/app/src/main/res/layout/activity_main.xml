@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:padding="16dp" android:background="@color/bg"
+    android:fitsSystemWindows="true">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:text="Pad Remote" android:textColor="@color/text" android:textSize="18sp" android:textStyle="bold" />
+        <TextView android:id="@+id/link" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Not connected" android:textColor="@color/muted" android:textSize="14sp" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp"
+        android:orientation="vertical" android:gravity="center_horizontal" android:padding="12dp" android:background="@drawable/bg_card">
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SPEED (MPH)"
+            android:textColor="@color/muted" android:textSize="13sp" />
+        <TextView android:id="@+id/speed" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0.0"
+            android:textColor="@color/text" android:textSize="64sp" android:textStyle="bold" />
+        <TextView android:id="@+id/target" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text=""
+            android:textColor="@color/muted" android:textSize="15sp" />
+    </LinearLayout>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="horizontal">
+        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical"
+            android:padding="12dp" android:background="@drawable/bg_card">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="DISTANCE (MI)" android:textColor="@color/muted" android:textSize="13sp" />
+            <TextView android:id="@+id/dist" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0.00" android:textColor="@color/text" android:textSize="32sp" android:textStyle="bold" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="10dp"
+            android:orientation="vertical" android:padding="12dp" android:background="@drawable/bg_card">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="TIME" android:textColor="@color/muted" android:textSize="13sp" />
+            <TextView android:id="@+id/time" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0:00" android:textColor="@color/text" android:textSize="32sp" android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <View android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+
+    <Button android:id="@+id/connect" android:layout_width="match_parent" android:layout_height="64dp"
+        android:text="Connect" android:textSize="20sp" android:textColor="@color/text" android:background="@drawable/bg_accent" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="84dp" android:layout_marginTop="10dp" android:orientation="horizontal">
+        <Button android:id="@+id/down" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:text="−" android:textSize="40sp" android:textColor="@color/text" android:background="@drawable/bg_btn" />
+        <Button android:id="@+id/up" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
+            android:layout_marginStart="10dp" android:text="+" android:textSize="40sp" android:textColor="@color/text" android:background="@drawable/bg_btn" />
+    </LinearLayout>
+    <Button android:id="@+id/start" android:layout_width="match_parent" android:layout_height="68dp" android:layout_marginTop="10dp"
+        android:text="Start" android:textSize="22sp" android:textStyle="bold" android:textColor="@color/text" android:background="@drawable/bg_go" />
+    <Button android:id="@+id/stop" android:layout_width="match_parent" android:layout_height="104dp" android:layout_marginTop="10dp"
+        android:text="STOP" android:textSize="32sp" android:textStyle="bold" android:textColor="@color/text" android:background="@drawable/bg_stop" />
+</LinearLayout>
