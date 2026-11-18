@@ -29,13 +29,14 @@ public final class PadProtocol {
         public State state = State.STOPPED;
         public int speedRaw, targetRaw, maxRaw = DEFAULT_MAX_RAW;
         public long distM, steps, durSec;
+        public int calories, heartRate;
     }
 
-    static byte[] command(int cmd, int speedRaw, int ramp) {
+    static byte[] command(int cmd, int speedRaw, int ramp, int weightKg) {
         byte[] p = new byte[23];
         p[0] = 0x6a; p[1] = 0x17;
         p[6] = (byte) (speedRaw >> 8); p[7] = (byte) speedRaw;
-        p[8] = (byte) ramp; p[9] = 0; p[10] = 80; p[11] = 0;
+        p[8] = (byte) ramp; p[9] = 0; p[10] = (byte) weightKg; p[11] = 0;
         p[12] = (byte) (cmd | 0x08); // bit 3 = miles mode, matches the pad's setting
         for (int i = 0; i < 8; i++) p[13 + i] = (byte) (USER_ID >> (56 - i * 8));
         int c = 0;
@@ -44,9 +45,14 @@ public final class PadProtocol {
         return p;
     }
 
-    public static byte[] start(int speedRaw) { return command(4, speedRaw, 1); }
-    public static byte[] setSpeed(int speedRaw) { return command(4, speedRaw, 5); }
-    public static byte[] stop() { return command(0, 0, 1); }
+    public static final int DEFAULT_WEIGHT_KG = 80;
+    /** Weight is used by the pad for its calorie estimate. */
+    public static byte[] start(int speedRaw, int weightKg) { return command(4, speedRaw, 1, weightKg); }
+    public static byte[] setSpeed(int speedRaw, int weightKg) { return command(4, speedRaw, 5, weightKg); }
+    public static byte[] stop(int weightKg) { return command(0, 0, 1, weightKg); }
+    public static byte[] start(int speedRaw) { return start(speedRaw, DEFAULT_WEIGHT_KG); }
+    public static byte[] setSpeed(int speedRaw) { return setSpeed(speedRaw, DEFAULT_WEIGHT_KG); }
+    public static byte[] stop() { return stop(DEFAULT_WEIGHT_KG); }
 
     /** Wraps a reply in the outer 4D frame. body == null means heartbeat. */
     public static byte[] frame(int seq, byte[] body) {
@@ -70,6 +76,8 @@ public final class PadProtocol {
         s.targetRaw = u16(d, 4 + 5);
         s.distM = u32(d, 4 + 7);
         s.steps = u32(d, 4 + 14);
+        s.heartRate = d[4 + 13] & 0xff;
+        s.calories = u16(d, 4 + 18);
         long dur = u32(d, 4 + 20);
         int fw = d[4 + 25] & 0xff;
         s.durSec = fw > 19 ? dur / 1000 : dur;

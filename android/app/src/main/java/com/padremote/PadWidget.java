@@ -8,7 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.widget.RemoteViews;
 
-/** Home-screen widget: live speed / distance / time plus − Start STOP + buttons. */
+/** Home-screen widget: live speed / distance / time / steps plus − Start STOP + buttons. */
 public class PadWidget extends AppWidgetProvider {
 
     @Override public void onUpdate(Context ctx, AppWidgetManager mgr, int[] ids) { refresh(ctx); }
@@ -27,12 +27,18 @@ public class PadWidget extends AppWidgetProvider {
         PadProtocol.Status s = PadService.status;
         boolean on = PadService.connected;
         boolean moving = s.state == PadProtocol.State.RUNNING || s.state == PadProtocol.State.STARTING;
-        v.setTextViewText(R.id.w_speed, on ? String.format("%.1f", PadProtocol.rawToMph(s.speedRaw)) : "–");
-        v.setTextViewText(R.id.w_dist, on ? String.format("%.2f mi", s.distM / PadProtocol.M_PER_MILE) : "– mi");
-        v.setTextViewText(R.id.w_time, on ? MainActivity.fmtTime(s.durSec) : "–:––");
-        v.setTextViewText(R.id.w_status, on
-                ? PadService.stateWord(s.state) + " · " + (moving ? "target " : "start at ") + String.format("%.1f mph", PadService.targetMph)
-                : PadService.link + " · tap Start");
+
+        v.setTextViewText(R.id.w_speed, Fmt.mph(on ? PadProtocol.rawToMph(s.speedRaw) : 0));
+        v.setTextViewText(R.id.w_dist, Fmt.miles(s.distM / PadProtocol.M_PER_MILE) + " mi");
+        v.setTextViewText(R.id.w_time, Fmt.time(s.durSec));
+        v.setTextViewText(R.id.w_extra, on && (s.steps > 0 || s.calories > 0)
+                ? Fmt.count(s.steps) + " steps · " + s.calories + " kcal" : "");
+        v.setTextViewText(R.id.w_status, on ? PadService.stateWord(s.state) : PadService.link);
+        v.setTextViewText(R.id.w_target, (moving ? "→ " : "starts at ") + Fmt.mph(PadService.targetMph));
+        v.setTextColor(R.id.w_dot, ctx.getColor(!on ? R.color.muted : moving ? R.color.go : R.color.accent));
+        v.setTextViewText(R.id.w_start, moving ? "Running" : "Start");
+        v.setInt(R.id.w_start, "setBackgroundResource", moving ? R.drawable.bg_btn : R.drawable.bg_go);
+
         v.setOnClickPendingIntent(R.id.w_down, action(ctx, PadService.ACTION_DOWN));
         v.setOnClickPendingIntent(R.id.w_up, action(ctx, PadService.ACTION_UP));
         v.setOnClickPendingIntent(R.id.w_start, action(ctx, PadService.ACTION_START));

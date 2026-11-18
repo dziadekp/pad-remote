@@ -74,6 +74,7 @@ public class PadService extends Service {
     private int seq, frames;
     private long stoppedSince = 0;
     private final PadProtocol.Assembler assembler = new PadProtocol.Assembler();
+    private final SessionTracker tracker = new SessionTracker();
     private static final String TAG = "PadRemote";
 
     @Override public IBinder onBind(Intent i) { return null; }
@@ -113,10 +114,10 @@ public class PadService extends Service {
         boolean moving = s.state == PadProtocol.State.RUNNING || s.state == PadProtocol.State.STARTING;
         switch (action) {
             case ACTION_START:
-                pending = PadProtocol.start(PadProtocol.mphToRaw(targetMph, s.maxRaw));
+                pending = PadProtocol.start(PadProtocol.mphToRaw(targetMph, s.maxRaw), weightKg());
                 break;
             case ACTION_STOP:
-                pending = PadProtocol.stop();
+                pending = PadProtocol.stop(weightKg());
                 break;
             case ACTION_UP:
             case ACTION_DOWN:
@@ -125,7 +126,7 @@ public class PadService extends Service {
                 double t = targetMph + (ACTION_UP.equals(action) ? STEP_MPH : -STEP_MPH);
                 targetMph = Math.round(Math.max(minMph, Math.min(maxMph, t)) * 10) / 10.0;
                 prefs().edit().putFloat("targetMph", (float) targetMph).apply();
-                if (moving) pending = PadProtocol.setSpeed(PadProtocol.mphToRaw(targetMph, s.maxRaw));
+                if (moving) pending = PadProtocol.setSpeed(PadProtocol.mphToRaw(targetMph, s.maxRaw), weightKg());
                 break;
         }
         publish();
@@ -224,13 +225,15 @@ public class PadService extends Service {
         byte[] v = assembler.push(chunk);
         if (v == null) return;                 // wait for the rest of the frame
         PadProtocol.Status s = PadProtocol.decode(v);
-        if (frames++ % 10 == 0) Log.i(TAG, "frame len=" + v.length + " chunk=" + chunk.length
-                + " decoded=" + (s == null ? "no" : s.state + " speed=" + s.speedRaw + " dist=" + s.distM));
+        if (frames++ % 20 == 0) Log.i(TAG, "frame len=" + v.length + " decoded=" + (s == null ? "no"
+                : s.state + " speed=" + s.speedRaw + " dist=" + s.distM + " dur=" + s.durSec + " steps=" + s.steps
+                + " cal=" + s.calories + " hr=" + s.heartRate));
         if (s != null) {
             boolean moving = s.state == PadProtocol.State.RUNNING || s.state == PadProtocol.State.STARTING;
             if (moving && s.targetRaw > 0) targetMph = Math.round(PadProtocol.rawToMph(s.targetRaw) * 10) / 10.0;
             status = s;
             long now = System.currentTimeMillis();
+            saveSession(tracker.onStatus(s, now));
             if (moving) stoppedSince = 0; else if (stoppedSince == 0) stoppedSince = now;
             if (stoppedSince > 0 && now - stoppedSince > IDLE_OFF_MS && pending == null) { closeAll(true); return; }
         }
@@ -255,7 +258,15 @@ public class PadService extends Service {
         if (!ok) { writing = false; if (body != null) pending = body; } // retry on the next frame
     }
 
+    private void saveSession(SessionTracker.Session done) {
+        if (done == null) return;
+        try { SessionStore.get(this).save(done); } catch (Exception e) { Log.w(TAG, "save failed", e); }
+    }
+
+    private int weightKg() { return prefs().getInt("weightKg", PadProtocol.DEFAULT_WEIGHT_KG); }
+
     private void onLinkLost(BluetoothGatt g) {
+        saveSession(tracker.onLinkLost(System.currentTimeMillis()));
         boolean wasMoving = status.state == PadProtocol.State.RUNNING || status.state == PadProtocol.State.STARTING;
         boolean wasReady = ready;
         closeGatt();
@@ -276,6 +287,7 @@ public class PadService extends Service {
 
     private void closeAll(boolean byUser) {
         userClosing = byUser;
+        saveSession(tracker.onLinkLost(System.currentTimeMillis()));
         stopScan();
         closeGatt();
         link = "Not connected";
@@ -313,7 +325,8 @@ public class PadService extends Service {
     private Notification buildNotification() {
         PadProtocol.Status s = status;
         String text = connected
-                ? String.format("%s · %.1f mph · %.2f mi", stateWord(s.state), PadProtocol.rawToMph(s.speedRaw), s.distM / PadProtocol.M_PER_MILE)
+                ? String.format("%s · %.1f mph · %.2f mi · %s", stateWord(s.state), PadProtocol.rawToMph(s.speedRaw),
+                        s.distM / PadProtocol.M_PER_MILE, MainActivity.fmtTime(s.durSec))
                 : link;
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_pad)
@@ -358,6 +371,7 @@ public class PadService extends Service {
     private SharedPreferences prefs() { return getSharedPreferences("pad", Context.MODE_PRIVATE); }
 
     @Override public void onDestroy() {
+        saveSession(tracker.onLinkLost(System.currentTimeMillis()));
         stopScan();
         closeGatt();
         link = "Not connected";
