@@ -13,16 +13,20 @@ public final class DailyReport {
     /** Message for the day that starts at dayStartMs (local midnight). */
     public static String text(List<SessionTracker.Session> sessions, long dayStartMs) {
         long dayEndMs = dayStartMs + 24L * 3600 * 1000;
-        long steps = 0, sec = 0, distM = 0; int n = 0;
+        long steps = 0, sec = 0; int n = 0;
         for (SessionTracker.Session s : sessions) {
             if (s.startMs < dayStartMs || s.startMs >= dayEndMs) continue;
-            steps += s.steps; sec += s.durSec; distM += s.distM; n++;
+            steps += s.steps; sec += s.durSec; n++;
         }
         String day = new SimpleDateFormat("EEE, MMM d", Locale.US).format(new Date(dayStartMs));
-        if (n == 0) return "Walk report for " + day + ": no walk today.";
-        return "Walk report for " + day + ": " + Fmt.count(steps) + " steps, "
-                + String.format(Locale.US, "%.1f", distM / PadProtocol.M_PER_MILE) + " mi, "
-                + Math.round(sec / 60.0) + " min" + (n > 1 ? " (" + n + " walks)" : "") + ".";
+        if (n == 0) return "Treadmill " + day + ": no walk today.";
+        return "Treadmill " + day + ": " + Fmt.count(steps) + " steps, " + minutes(sec) + " on the treadmill.";
+    }
+
+    /** 58 min, or 1 h 05 min. */
+    static String minutes(long sec) {
+        long m = Math.round(sec / 60.0);
+        return m < 60 ? m + " min" : String.format(Locale.US, "%d h %02d min", m / 60, m % 60);
     }
 
     /** Local midnight at the start of the day containing ms. */

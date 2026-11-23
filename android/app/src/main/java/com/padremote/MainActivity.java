@@ -100,7 +100,7 @@ public class MainActivity extends Activity {
             ReportReceiver.schedule(this);
         };
         new AlertDialog.Builder(this).setTitle("Doctor report")
-                .setMessage("At 9 pm you get a notification with today's steps, miles and minutes. "
+                .setMessage("At 9 pm you get a notification with today's steps and time on the treadmill. "
                         + "Tapping it opens Messages with the text ready. You press Send.")
                 .setView(box)
                 .setPositiveButton("Save", (d, w) -> save.run())

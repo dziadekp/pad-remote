@@ -25,17 +25,17 @@ public class DailyReportTest {
         all.add(walk(at(2026, 11, 23, 10, 35), 1800, 2414, 3450));
         all.add(walk(at(2026, 11, 23, 18, 0), 1680, 2253, 3200));
         all.add(walk(at(2026, 11, 22, 19, 0), 3600, 4828, 7000));   // yesterday: left out
-        assertEquals("Walk report for Mon, Nov 23: 6,650 steps, 2.9 mi, 58 min (2 walks).",
+        assertEquals("Treadmill Mon, Nov 23: 6,650 steps, 58 min on the treadmill.",
                 DailyReport.text(all, DailyReport.dayStart(at(2026, 11, 23, 21, 0))));
     }
-    @Test public void oneWalkHasNoCount() {
+    @Test public void overAnHourShowsHours() {
         List<SessionTracker.Session> all = new ArrayList<>();
-        all.add(walk(at(2026, 11, 23, 10, 35), 1800, 2414, 3450));
-        assertEquals("Walk report for Mon, Nov 23: 3,450 steps, 1.5 mi, 30 min.",
+        all.add(walk(at(2026, 11, 23, 10, 35), 3900, 5200, 7500));
+        assertEquals("Treadmill Mon, Nov 23: 7,500 steps, 1 h 05 min on the treadmill.",
                 DailyReport.text(all, DailyReport.dayStart(at(2026, 11, 23, 21, 0))));
     }
     @Test public void sayssoWhenNoWalk() {
-        assertEquals("Walk report for Mon, Nov 23: no walk today.",
+        assertEquals("Treadmill Mon, Nov 23: no walk today.",
                 DailyReport.text(new ArrayList<>(), DailyReport.dayStart(at(2026, 11, 23, 21, 0))));
     }
     @Test public void nextNinePm() {
