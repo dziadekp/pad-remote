@@ -40,6 +40,20 @@ public class PadProtocolTest {
         assertEquals(338, s.distM);
         assertEquals(6000, s.maxRaw);
     }
+    @Test public void readsStepsFromMotorFieldWhenMainFieldIsZero() {
+        // captured on the pad 2026-11-23, 3.0 mph, 140 s into a walk
+        PadProtocol.Status s = PadProtocol.decode(unhex(
+                "4d04192f682f0012c012c0000000ba000000000000000012000222e03e1b8a177000050000000000000000003808c700fa8743"));
+        assertEquals(PadProtocol.State.RUNNING, s.state);
+        assertEquals(186, s.distM);
+        assertEquals(250, s.steps);
+    }
+    @Test public void firstFrameSerialIsNotReadAsSteps() {
+        // 52-byte first frame: payload 43-44 hold serial number text, not steps
+        PadProtocol.Status s = PadProtocol.decode(unhex(
+                "4d0401346834000000000000000185000000000000000000000000003d1b82177000050074434d6c3133455658324663363333300e023443"));
+        assertEquals(0, s.steps);
+    }
     @Test public void assemblesFrameSplitInto20BytePieces() {
         String hex = "4d040134683400000000000000015200000000000000000000000000351b82177000050074434d6c3133455658324663363333300e02eb43";
         byte[] full = unhex(hex);

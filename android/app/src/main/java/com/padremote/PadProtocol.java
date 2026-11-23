@@ -88,6 +88,12 @@ public final class PadProtocol {
             case 16: s.state = State.PAUSED; break;
             default: s.state = State.STOPPED;
         }
+        // Newer firmware leaves the main steps field at 0 and counts steps from the motor load
+        // in an extra field (payload 43-44). Only in the short running frames: in the 52-byte
+        // first frame those bytes are the serial number. Checked against a walk on 2026-11-23.
+        int len = d[4 + 1] & 0xff;
+        if (s.steps == 0 && fw >= 25 && len > 44 && len < 52 && d.length >= 4 + 45)
+            s.steps = u16(d, 4 + 43);
         int max = u16(d, 4 + 27);
         if (max >= MIN_RAW && max <= 20000) s.maxRaw = max;
         return s;
