@@ -35,7 +35,7 @@ public class DailyReportTest {
                 DailyReport.text(all, DailyReport.dayStart(at(2026, 11, 23, 21, 0))));
     }
     @Test public void sayssoWhenNoWalk() {
-        assertEquals("Treadmill Mon, Nov 23: no walk today.",
+        assertEquals("Mon, Nov 23: no treadmill walk today.",
                 DailyReport.text(new ArrayList<>(), DailyReport.dayStart(at(2026, 11, 23, 21, 0))));
     }
     @Test public void nextNinePm() {

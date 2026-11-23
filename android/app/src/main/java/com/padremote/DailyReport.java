@@ -19,7 +19,7 @@ public final class DailyReport {
             steps += s.steps; sec += s.durSec; n++;
         }
         String day = new SimpleDateFormat("EEE, MMM d", Locale.US).format(new Date(dayStartMs));
-        if (n == 0) return "Treadmill " + day + ": no walk today.";
+        if (n == 0) return day + ": no treadmill walk today.";
         return "Treadmill " + day + ": " + Fmt.count(steps) + " steps, " + minutes(sec) + " on the treadmill.";
     }
 
