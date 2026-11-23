@@ -26,6 +26,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -356,20 +357,35 @@ public class PadService extends Service {
 
     private Notification buildNotification() {
         PadProtocol.Status s = status;
+        boolean walking = connected && (s.state == PadProtocol.State.RUNNING || s.state == PadProtocol.State.STARTING
+                || s.state == PadProtocol.State.PAUSED);
+        String mph = Fmt.mph(PadProtocol.rawToMph(s.speedRaw)) + " mph";
+        Estimates.Shown e = Profile.shown(this, s);
+        String title = walking ? mph + " · " + stateWord(s.state) : "Walking pad";
         String text = connected
-                ? String.format("%s · %.1f mph · %.2f mi · %s", stateWord(s.state), PadProtocol.rawToMph(s.speedRaw),
-                        s.distM / PadProtocol.M_PER_MILE, MainActivity.fmtTime(s.durSec))
+                ? Fmt.time(s.durSec) + " · " + Profile.steps(e) + " steps · " + Fmt.miles(s.distM / PadProtocol.M_PER_MILE)
+                        + " mi · " + Profile.calories(e) + " kcal"
                 : link;
-        return new Notification.Builder(this, CHANNEL)
+        Notification.Builder b = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(R.drawable.ic_pad)
-                .setContentTitle("Walking pad")
+                .setContentTitle(title)
                 .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
+                .setVisibility(Notification.VISIBILITY_PUBLIC)   // numbers show on the lock screen too
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setContentIntent(openApp())
                 .addAction(new Notification.Action.Builder(null, "STOP", PadWidget.action(this, ACTION_STOP)).build())
-                .addAction(new Notification.Action.Builder(null, "Disconnect", PadWidget.action(this, ACTION_DISCONNECT)).build())
-                .build();
+                .addAction(new Notification.Action.Builder(null, "Disconnect", PadWidget.action(this, ACTION_DISCONNECT)).build());
+        // Android 16 "Live Update": while walking, stays at the top of the lock screen and on the
+        // always-on display (Samsung Now Bar), with the speed in the status-bar chip.
+        // (the request is the "android.requestPromotedOngoing" extra; SDK 36 has no setter for it yet)
+        if (Build.VERSION.SDK_INT >= 36 && walking) {
+            Bundle x = new Bundle();
+            x.putBoolean("android.requestPromotedOngoing", true);
+            b.addExtras(x).setShortCriticalText(mph);
+        }
+        return b.build();
     }
 
     private PendingIntent openApp() {

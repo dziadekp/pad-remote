@@ -12,9 +12,13 @@
             <TextView android:id="@+id/w_status" android:layout_width="wrap_content" android:layout_height="wrap_content"
                 android:layout_marginStart="6dp" android:text="Walking pad" android:textColor="@color/text" android:textSize="13sp" android:maxLines="1" />
         </LinearLayout>
-        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" />
         <TextView android:id="@+id/w_target" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="" android:textColor="@color/muted" android:textSize="13sp" />
+            android:layout_marginStart="10dp" android:text="" android:textColor="@color/muted" android:textSize="13sp" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" />
+        <!-- Stop sits up here, away from +/- so it isn't hit by accident -->
+        <Button android:id="@+id/w_stop" android:layout_width="96dp" android:layout_height="44dp"
+            android:text="Stop" android:textAllCaps="false" android:textSize="16sp" android:textStyle="bold"
+            android:textColor="@color/text" android:background="@drawable/bg_stop" />
     </LinearLayout>
 
     <!-- hero speed, fills spare height -->
@@ -66,9 +70,6 @@
         <Button android:id="@+id/w_start" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.6"
             android:layout_marginStart="8dp" android:text="Start" android:textAllCaps="false" android:textSize="16sp" android:textStyle="bold"
             android:textColor="@color/text" android:background="@drawable/bg_go" />
-        <Button android:id="@+id/w_stop" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1.6"
-            android:layout_marginStart="8dp" android:text="Stop" android:textAllCaps="false" android:textSize="16sp" android:textStyle="bold"
-            android:textColor="@color/text" android:background="@drawable/bg_stop" />
         <Button android:id="@+id/w_up" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
             android:layout_marginStart="8dp" android:text="+" android:textSize="26sp" android:textColor="@color/text" android:background="@drawable/bg_tile" />
     </LinearLayout>

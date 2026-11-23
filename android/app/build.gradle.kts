@@ -2,7 +2,7 @@ plugins { id("com.android.application") }
 
 android {
     namespace = "com.padremote"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.padremote"
         minSdk = 29
