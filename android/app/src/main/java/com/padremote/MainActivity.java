@@ -39,8 +39,11 @@ public class MainActivity extends Activity {
         findViewById(R.id.up).setOnClickListener(x -> send(PadService.ACTION_UP));
         findViewById(R.id.down).setOnClickListener(x -> send(PadService.ACTION_DOWN));
         findViewById(R.id.history).setOnClickListener(x -> startActivity(new Intent(this, HistoryActivity.class)));
-        findViewById(R.id.settings).setOnClickListener(x -> askProfile());
+        findViewById(R.id.settings).setOnClickListener(x -> new AlertDialog.Builder(this)
+                .setItems(new String[]{"Your profile", "Doctor report"}, (d, w) -> { if (w == 0) askProfile(); else askReport(); })
+                .show());
         askPermissions();
+        ReportReceiver.schedule(this);
         if (PadService.ACTION_CONNECT.equals(getIntent().getAction())) send(PadService.ACTION_CONNECT);
     }
 
@@ -74,6 +77,37 @@ public class MainActivity extends Activity {
                         if (newCm >= 120 && newCm <= 230) ed.putInt("heightCm", newCm);
                         ed.apply();
                     } catch (NumberFormatException ignored) {}
+                })
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    /** Doctor's number and on/off for the 9 pm report. Nothing is ever sent without Peter pressing Send. */
+    private void askReport() {
+        SharedPreferences p = ReportReceiver.prefs(this);
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = Math.round(20 * getResources().getDisplayMetrics().density);
+        box.setPadding(pad, pad / 2, pad, 0);
+        EditText num = field(box, "Doctor's mobile number", ReportReceiver.number(this));
+        num.setInputType(InputType.TYPE_CLASS_PHONE);
+        android.widget.CheckBox on = new android.widget.CheckBox(this);
+        on.setText("Remind me every evening at 9 pm");
+        on.setChecked(p.getBoolean("doctorReport", false));
+        box.addView(on);
+        Runnable save = () -> {
+            p.edit().putString("doctorNumber", num.getText().toString().trim())
+                    .putBoolean("doctorReport", on.isChecked()).apply();
+            ReportReceiver.schedule(this);
+        };
+        new AlertDialog.Builder(this).setTitle("Doctor report")
+                .setMessage("At 9 pm you get a notification with today's steps, miles and minutes. "
+                        + "Tapping it opens Messages with the text ready. You press Send.")
+                .setView(box)
+                .setPositiveButton("Save", (d, w) -> save.run())
+                .setNeutralButton("Preview now", (d, w) -> {
+                    save.run();
+                    if (ReportReceiver.number(this).isEmpty()) return;
+                    ReportReceiver.show(this);
                 })
                 .setNegativeButton("Cancel", null).show();
     }
